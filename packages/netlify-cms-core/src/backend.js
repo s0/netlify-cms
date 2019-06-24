@@ -78,7 +78,7 @@ function getLabelForFileCollectionEntry(collection, path) {
   return files && files.find(f => f.get('file') === path).get('label');
 }
 
-function slugFormatter(collection, entryData, slugConfig) {
+export function slugFormatter(collection, entryData, slugConfig) {
   const template = collection.get('slug') || '{{slug}}';
 
   const identifier = entryData.get(selectIdentifier(collection));
@@ -686,11 +686,12 @@ class Backend {
     return this.implementation.persistEntry(entryObj, MediaFiles, opts).then(() => entryObj.slug);
   }
 
-  persistMedia(config, file) {
-    const options = {
+  persistMedia(config, file, options) {
+    const modifiedOptions = {
       commitMessage: commitMessageFormatter('uploadMedia', config, { path: file.path }),
+      ...options,
     };
-    return this.implementation.persistMedia(file, options);
+    return this.implementation.persistMedia(file, modifiedOptions);
   }
 
   deleteEntry(config, collection, slug) {

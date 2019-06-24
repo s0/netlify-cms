@@ -1,12 +1,13 @@
 import { Map } from 'immutable';
 import { actions as notifActions } from 'redux-notifications';
 import { resolveMediaFilename, getBlobSHA } from 'netlify-cms-lib-util';
-import { currentBackend } from 'coreSrc/backend';
+import { currentBackend, slugFormatter } from 'coreSrc/backend';
 import { createAssetProxy } from 'ValueObjects/AssetProxy';
 import { selectIntegration } from 'Reducers';
 import { getIntegrationProvider } from 'Integrations';
 import { addAsset } from './media';
 import { sanitizeSlug } from 'Lib/urlHelper';
+import { EDITORIAL_WORKFLOW } from 'Constants/publishModes';
 
 const { notifSend } = notifActions;
 
@@ -155,6 +156,53 @@ export function persistMedia(file, opts = {}) {
     const fileName = sanitizeSlug(file.name.toLowerCase(), state.config.get('slug'));
     const existingFile = files.find(existingFile => existingFile.name.toLowerCase() === fileName);
 
+    const entryDraft = state.entryDraft;
+    const config = state.config;
+    const publishMode = state.config.get('publish_mode');
+    const options = {
+      mode: publishMode,
+      slug: `upload_${fileName}`,
+    };
+
+    if (publishMode === EDITORIAL_WORKFLOW) {
+      const tempCollectionName = state.entryDraft.getIn(['entry', 'collection']); // May be set to draft sometimes.
+      const collectionName =
+        tempCollectionName === 'draft'
+          ? state.entryDraft.getIn(['entry', 'metadata', 'collection'])
+          : tempCollectionName;
+      const collection = state.collections.get(collectionName) || '';
+      const collectionLabel = collection && collection.get('label');
+      let slug;
+      try {
+        slug =
+          entryDraft.getIn(['entry', 'slug']) ||
+          slugFormatter(collection, entryDraft.getIn(['entry', 'data']), config.get('slug'));
+      } catch (e) {
+        console.error(e);
+        dispatch({ type: MEDIA_LIBRARY_CLOSE });
+        dispatch(
+          notifSend({
+            message: {
+              key: 'ui.toast.missingRequiredFieldsForSlugForUpload',
+            },
+            kind: 'danger',
+            dismissAfter: 10000,
+          }),
+        );
+        return;
+      }
+
+      options.PRName = `Create ${collectionLabel} "${slug}"`;
+      options.slug = slug;
+      options.collectionName = collectionName;
+      options.isMediaOnlyPR = true;
+      options.useWorkflow = true;
+      if (tempCollectionName === 'draft') {
+        // This is a draft. Update the branch.
+        options.unpublished = true;
+      }
+    }
+
     /**
      * Check for existing files of the same name before persisting. If no asset
      * store integration is used, files are being stored in Git, so we can
@@ -176,7 +224,7 @@ export function persistMedia(file, opts = {}) {
       const assetProxy = await createAssetProxy(fileName, file, false, privateUpload);
       dispatch(addAsset(assetProxy));
       if (!integration) {
-        const asset = await backend.persistMedia(state.config, assetProxy);
+        const asset = await backend.persistMedia(state.config, assetProxy, options);
         const displayURL = asset.displayURL || URL.createObjectURL(file);
         return dispatch(mediaPersisted({ id, displayURL, ...asset }));
       }
